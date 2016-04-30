@@ -16,9 +16,6 @@ public class DNSServer {
     DNSServer(String rootServer, String amazonEC2CSV) {
         this.rootServer = rootServer;
         this.ec2InstanceMap = parseAmazonCSV(amazonEC2CSV);
-    }
-
-    public void start() {
         try {
             this.serverSocket = new DatagramSocket(8053);
             System.out.println("SimplesDNS server opened socket on port 8053...");
@@ -40,7 +37,19 @@ public class DNSServer {
             }
         }
         catch(IOException e) {
-            System.out.println("Error while receiving packet. Exiting...");
+            System.out.println("Error while receiving query packet. Exiting...");
+            serverSocket.close();
+            System.exit(1);
+        }
+    }
+
+    private void respond(DatagramPacket packet) {
+        try {
+            serverSocket.send(packet);
+        }
+        catch(IOException e) {
+            System.out.println("Error while sending response packet. Exiting...");
+            serverSocket.close();
             System.exit(1);
         }
     }
