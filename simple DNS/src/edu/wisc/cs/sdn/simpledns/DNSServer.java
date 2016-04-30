@@ -1,16 +1,15 @@
 package edu.wisc.cs.sdn.simpledns;
 
+import edu.wisc.cs.sdn.simpledns.packet.DNS;
+
 import java.io.*;
 
+import java.net.*;
 import java.util.HashMap;
-
-import java.net.ServerSocket;
-import java.net.Socket;
 
 public class DNSServer {
 
-    private ServerSocket serverSocket;
-    private Socket socket;
+    private DatagramSocket serverSocket;
     private String rootServer;
     private HashMap<String, EC2Instance> ec2InstanceMap;
 
@@ -21,26 +20,27 @@ public class DNSServer {
 
     public void start() {
         try {
-            this.serverSocket = new ServerSocket(8053);
+            this.serverSocket = new DatagramSocket(8053);
             System.out.println("SimplesDNS server opened socket on port 8053...");
         }
-        catch(IOException e) {
+        catch(SocketException e) {
             System.out.println("SimpleDNS unable to open serverSocket on port 8053. Exiting...");
             System.exit(1);
         }
+    }
 
+    public void run() {
         try {
-            System.out.println("SimpleDNS server now accepting DNS queries...");
-            this.socket = serverSocket.accept();
+            while(true) {
+                byte[] buffer = new byte[1500];
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                serverSocket.receive(packet);
+                DNS dnsPacket = DNS.deserialize(packet.getData(), packet.getLength());
+                System.out.println(dnsPacket.toString());
+            }
         }
         catch(IOException e) {
-            System.out.println("SimpleDNS unable to start accepting queries. Exiting...");
-            try {
-                this.serverSocket.close();
-            }
-            catch(IOException e2) {
-                System.out.println("Unable to close serverSocket");
-            }
+            System.out.println("Error while receiving packet. Exiting...");
             System.exit(1);
         }
     }

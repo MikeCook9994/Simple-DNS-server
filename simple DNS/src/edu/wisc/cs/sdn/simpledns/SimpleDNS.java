@@ -1,15 +1,14 @@
 package edu.wisc.cs.sdn.simpledns;
 
-
-
-public class SimpleDNS 
+public class SimpleDNS
 {
 	public static void main(String[] args)
 	{
         String[] parsedArguments = parseArgs(args);
 
-        DNSServer server = new DNSServer(parsedArguments[0], parsedArguments[1]);
-        server.start();
+        DNSServer DNSServer = new DNSServer(parsedArguments[0], parsedArguments[1]);
+        DNSServer.start();
+        DNSServer.run();
 	}
 
     /**
