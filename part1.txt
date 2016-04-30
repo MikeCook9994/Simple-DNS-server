@@ -1,0 +1,82 @@
+1) DNS
+
+    a. According to the WebPagetest data, how many DNS lookups were performed by the client? 
+    How many of the lookups were redundant (i.e., the lookup was for the same domain name)? 
+    
+    Answer: We have 12 seperate DNS requests made. 
+    
+    b. Assuming no DNS records were cached at the local DNS server, what DNS queries did the
+    local DNS server need to issue to satisfy the client’s first lookup?
+    
+    Answer: 
+    
+    Name Server Queried     | Records Returned
+    ________________________|__________________________________________
+    a.root-servers.net      | org, NS, d0.org.afilias-nst.org
+                            | d0.org.afilias-nst.org, A, 199.19.57.1
+    ________________________|__________________________________________ 
+    d0.org.afilias-nst.org  | code.org, NS, ns-1497.awsdns-59.org
+                            | ns-1497.awsdns-59.org, A, 205.251.197.217
+    ________________________|__________________________________________
+    ns-1497.awsdns-59.org   | www.code.org, A, 50.17.209.250
+    
+    c. Assuming the local DNS server cached all records it retrieved while satisfying the client’s first 
+    lookup, what DNS queries did the local DNS server need to issue to satisfy the client’s second 
+    lookup? For each query specify what server was queried and what records were received.
+
+    Answer: 
+    
+    Name Server Queried     | Records Returned
+    ________________________|__________________________________________
+    a.root-servers.net      | org, NS, d0.org.afilias-nst.org
+                            | d0.org.afilias-nst.org, A, 199.19.57.1
+    ________________________|__________________________________________ 
+    d0.org.afilias-nst.org  | code.org, NS, ns-1497.awsdns-59.org
+                            | ns-1497.awsdns-59.org, A, 205.251.197.217
+    ________________________|__________________________________________
+    ns-1497.awsdns-59.org   | code.org, A, 52.84.8.105
+
+2) Clouds & CDNs
+
+    a. Which domain names (if any) resolved to a node in Amazon EC2? In which EC2 region was 
+    the node located? Use the list of Amazon EC2 public IP ranges by region (download ip-
+    ranges.json file from that page) to help you answer this question.
+    
+    Answer: 
+    
+    http://www.code.org (50.17.209.250) --> 50.16.0.0/15
+    http://code.org (54.230.53.206) --> 54.230.0.0/16
+    
+    b. Which domain names (if any) resolved to a node in the Akamai or EdgeCast CDN?
+    
+    Answer: 
+    
+    c. According to the WebPagetest data, how many HTTP requests were issued to each CDN 
+    node? Over how many connections were these requests issued? 
+    
+    Answer: 
+    
+    d. How many of the requested web objects were already stored in the CDN’s cache? (Hint: look 
+    at the X-Cache field in the HTTP response header)
+    
+    Answer: 
+    
+    
+    
+    
+    
+    
+    
+    
+    www.code.org --> 50.17.209.250
+    code.org --> 54.230.53.206
+    www.fullstory.com --> 72.14.248.62
+    www.google-analytics.com --> 216.58.218.238
+    www.youtube.com --> 172.217.1.206
+    js-agent.newrelic.com --> 23.235.46.175
+    s.ytimg.com --> 216.58.218.238
+    bam.nr-data.net --> 50.31.164.166
+    www.google.com --> 74.125.196.147
+    static.doubleclick.net --> 216.58.218.238
+    i.ytimg.com --> 172.217.1.206
+    fonts.gstatic.com --> 74.125.22.94
