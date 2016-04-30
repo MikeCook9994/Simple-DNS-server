@@ -6,8 +6,7 @@ public class SimpleDNS
 	{
         String[] parsedArguments = parseArgs(args);
 
-        DNSServer DNSServer = new DNSServer(parsedArguments[0], parsedArguments[1]);
-        DNSServer.run();
+        new DNSServer(parsedArguments[0], parsedArguments[1]).run();
 	}
 
     /**

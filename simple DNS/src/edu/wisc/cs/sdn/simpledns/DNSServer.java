@@ -33,25 +33,22 @@ public class DNSServer {
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 serverSocket.receive(packet);
                 DNS dnsPacket = DNS.deserialize(packet.getData(), packet.getLength());
-                System.out.println(dnsPacket.toString());
+                parsePacket(dnsPacket);
             }
         }
         catch(IOException e) {
-            System.out.println("Error while receiving query packet. Exiting...");
+            System.out.println("Error while handling query packet. Exiting...");
             serverSocket.close();
             System.exit(1);
         }
     }
 
-    private void respond(DatagramPacket packet) {
-        try {
-            serverSocket.send(packet);
-        }
-        catch(IOException e) {
-            System.out.println("Error while sending response packet. Exiting...");
-            serverSocket.close();
-            System.exit(1);
-        }
+    private void parsePacket(DNS dnsPacket) {
+
+    }
+
+    private void respond(DatagramPacket packet) throws IOException{
+        serverSocket.send(packet);
     }
 
     private HashMap<String, EC2Instance> parseAmazonCSV(String amazonEC2CSV) {
