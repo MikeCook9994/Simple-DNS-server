@@ -6,7 +6,9 @@ import edu.wisc.cs.sdn.simpledns.packet.DNSResourceRecord;
 
 import java.io.*;
 
+import java.lang.reflect.Array;
 import java.net.*;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -40,14 +42,20 @@ public class DNSServer {
     public void run() {
         try {
             while(true) {
+
                 byte[] buffer = new byte[1500];
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+
                 serverSocket.receive(packet);
                 DNS dnsQuery = DNS.deserialize(packet.getData(), packet.getLength());
+
                 if(dnsQuery.isQuery() && dnsQuery.getOpcode() == DNS.OPCODE_STANDARD_QUERY) {
-                    DNS dnsResponse = handlePacket(packet, dnsQuery, this.rootServer);
-                    DatagramPacket responsePacket = new DatagramPacket(dnsResponse.serialize(), dnsResponse.serialize().length, packet.getAddress(), packet.getPort());
-                    serverSocket.send(responsePacket);
+                    for (DNSQuestion question : dnsQuery.getQuestions()) {
+                        DNS dnsResponse = handlePacket(packet, dnsQuery, question, this.rootServer);
+                        DatagramPacket responsePacket = new DatagramPacket(dnsResponse.serialize(), dnsResponse.serialize().length, packet.getAddress(), packet.getPort());
+                        serverSocket.send(responsePacket);
+                    }
+
                 }
             }
         }
@@ -58,65 +66,125 @@ public class DNSServer {
         }
     }
 
-    private DNS handlePacket(DatagramPacket packet, DNS dnsQuery, InetAddress dnsServer) throws IOException {
+    private DNS handlePacket(DatagramPacket packet, DNS dnsQuery, DNSQuestion question, InetAddress dnsServer) throws IOException {
 
         byte[] buffer = new byte[1500];
         DatagramPacket receivedPacket = new DatagramPacket(buffer, buffer.length);
 
-        ArrayList<DNSQuestion> questions = new ArrayList<DNSQuestion>(dnsQuery.getQuestions());
-        ArrayList<DNSResourceRecord> answers = new ArrayList<DNSResourceRecord>();
-        ArrayList<DNSResourceRecord> authorities = new ArrayList<DNSResourceRecord>();
-        ArrayList<DNSResourceRecord> additional = new ArrayList<DNSResourceRecord>();
+        ArrayList<DNSResourceRecord> answers = new ArrayList<>();
+        ArrayList<DNSResourceRecord> authorities = new ArrayList<>();
+        ArrayList<DNSResourceRecord> additionals = new ArrayList<>();
 
-        for (DNSQuestion question : dnsQuery.getQuestions()) {
-            if (isSupportedQuestionType(question.getType())) {
+        if (isSupportedQuestionType(question.getType())) {
 
-                DNS dnsQuestionQuery = new DNS();
-                dnsQuestionQuery.setQuestions(Collections.singletonList(question));
-                dnsQuestionQuery.setTruncated(false);
-                dnsQuestionQuery.setOpcode(DNS.OPCODE_STANDARD_QUERY);
-                dnsQuestionQuery.setId(dnsQuery.getId());
-                dnsQuestionQuery.setAuthenicated(false);
-                dnsQuestionQuery.setQuery(true);
-                dnsQuestionQuery.setRecursionDesired(false);
+            DNS dnsQuestionQuery = constructDNSQuery(dnsQuery.getId(), question);
+            packet.setData(dnsQuestionQuery.serialize());
 
-                packet.setData(dnsQuestionQuery.serialize());
+            DatagramPacket queryPacket = new DatagramPacket(packet.getData(), packet.getData().length, dnsServer, 53);
+            this.serverSocket.send(queryPacket);
 
-                DatagramPacket queryPacket = new DatagramPacket(packet.getData(), packet.getData().length, dnsServer, 53);
-                this.serverSocket.send(queryPacket);
+            serverSocket.receive(receivedPacket);
+            DNS queryResponse = DNS.deserialize(receivedPacket.getData(), receivedPacket.getData().length);
 
-                serverSocket.receive(receivedPacket);
-                DNS queryResponse = DNS.deserialize(receivedPacket.getData(), receivedPacket.getData().length);
-                answers.addAll(queryResponse.getAnswers());
-                authorities.addAll(queryResponse.getAuthorities());
-                additional.addAll(queryResponse.getAdditional());
+            answers.addAll(queryResponse.getAnswers());
+            authorities.addAll(queryResponse.getAuthorities());
+            additionals.addAll(queryResponse.getAdditional());
+
+            //we only care about further resolving the result if recursion is desired
+            if(dnsQuery.isRecursionDesired()) {
+                //if we did not find an answer, we want to use our additional/authority section to recurse
+                if(!isQueryResolved(answers, question)) {
+                    DNS recursiveReply = queryResponse;
+                    if(authorities.get(0).getType() == DNS.TYPE_NS) {
+                        recursiveReply = handlePacket(packet, dnsQuery, question, resolveNextServer(authorities, additionals));
+
+                    }
+                    else if(authorities.get(0).getType() == DNS.TYPE_CNAME) {
+                        recursiveReply = handlePacket(packet, dnsQuery, rewriteQuestion(answers.get(0), question), this.rootServer);
+
+                    }
+                    answers = new ArrayList<>(recursiveReply.getAnswers());
+                    authorities = new ArrayList<>(recursiveReply.getAuthorities());
+                    additionals = new ArrayList<>(recursiveReply.getAdditional());
+                }
             }
         }
 
-        //we only care about further resolving the result if recursion is desired
-        if(dnsQuery.isRecursionDesired() && answers.size() != 0) {
-            if(answers.get(0).getType() == DNS.TYPE_NS) {
+        return constructDNSReply(dnsQuery.getId(), question, answers, authorities, additionals);
+    }
 
-            }
-            else if(answers.get(0).getType() == DNS.TYPE_CNAME) {
+    private DNSQuestion rewriteQuestion(DNSResourceRecord answer, DNSQuestion question) {
+        DNSQuestion rewrittenQuestion = question;
+        rewrittenQuestion.setName(answer.getData().toString());
+        return rewrittenQuestion;
+    }
 
+    private InetAddress resolveNextServer(ArrayList<DNSResourceRecord> authorities, ArrayList<DNSResourceRecord> additionals) {
+
+        for(DNSResourceRecord authority : authorities) {
+            if(authority.getType() == DNS.TYPE_NS) {
+                for(DNSResourceRecord additional : additionals) {
+                    if(authority.getData().toString().equals(additional.getName())) {
+                        try{
+                            return InetAddress.getByName(additional.getData().toString());
+                        }
+                        catch(UnknownHostException e) {
+                            System.out.println("Unable to resolve ip address of next name server. Exiting...");
+                        }
+                    }
+                }
             }
         }
+
+        return null;
+    }
+
+    private DNS constructDNSQuery(short id, DNSQuestion question) {
+
+        DNS dnsQuery = new DNS();
+
+        dnsQuery.setId(id);
+
+        dnsQuery.setOpcode(DNS.OPCODE_STANDARD_QUERY);
+
+        dnsQuery.setTruncated(false);
+        dnsQuery.setAuthenicated(false);
+        dnsQuery.setQuery(true);
+        dnsQuery.setRecursionDesired(false);
+
+        dnsQuery.setQuestions(Collections.singletonList(question));
+
+        return dnsQuery;
+    }
+
+    private DNS constructDNSReply(short id, DNSQuestion question, ArrayList<DNSResourceRecord> answers, ArrayList<DNSResourceRecord> authorities, ArrayList<DNSResourceRecord> additionals) {
 
         DNS finalQueryResponse = new DNS();
-        finalQueryResponse.setTruncated(false);
+
+        finalQueryResponse.setId(id);
         finalQueryResponse.setOpcode(DNS.OPCODE_STANDARD_QUERY);
-        finalQueryResponse.setId(dnsQuery.getId());
+
+        finalQueryResponse.setTruncated(false);
         finalQueryResponse.setAuthenicated(false);
         finalQueryResponse.setQuery(false);
         finalQueryResponse.setRecursionDesired(false);
         finalQueryResponse.setRecursionAvailable(false);
-        finalQueryResponse.setQuestions(questions);
+
+        finalQueryResponse.setQuestions(Collections.singletonList(question));
         finalQueryResponse.setAnswers(answers);
         finalQueryResponse.setAuthorities(authorities);
-        finalQueryResponse.setAdditional(additional);
+        finalQueryResponse.setAdditional(additionals);
 
         return finalQueryResponse;
+    }
+
+    private boolean isQueryResolved(ArrayList<DNSResourceRecord> answers, DNSQuestion question) {
+        for(DNSResourceRecord answer : answers) {
+            if(answer.getType() == question.getType() && answer.getName().equals(question.getName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isSupportedQuestionType(short questionType) {
