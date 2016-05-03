@@ -2,22 +2,20 @@ package edu.wisc.cs.sdn.simpledns;
 
 import edu.wisc.cs.sdn.simpledns.packet.DNS;
 import edu.wisc.cs.sdn.simpledns.packet.DNSQuestion;
+import edu.wisc.cs.sdn.simpledns.packet.DNSRdataString;
 import edu.wisc.cs.sdn.simpledns.packet.DNSResourceRecord;
 
 import java.io.*;
 
 import java.lang.reflect.Array;
 import java.net.*;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
+import java.util.*;
 
 public class DNSServer {
 
     private DatagramSocket serverSocket;
     private InetAddress rootServer;
-    private HashMap<String, EC2Instance> ec2InstanceMap;
+    private ArrayList<EC2Instance> ec2Instances;
 
     DNSServer(String rootServer, String amazonEC2CSV) {
         try {
@@ -28,7 +26,7 @@ public class DNSServer {
             System.exit(1);
         }
 
-        this.ec2InstanceMap = parseAmazonCSV(amazonEC2CSV);
+        this.ec2Instances = parseAmazonCSV(amazonEC2CSV);
 
         try {
             this.serverSocket = new DatagramSocket(8053);
@@ -51,8 +49,12 @@ public class DNSServer {
 
                 if(dnsQuery.isQuery() && dnsQuery.getOpcode() == DNS.OPCODE_STANDARD_QUERY) {
                     for (DNSQuestion question : dnsQuery.getQuestions()) {
-                        DNS dnsResponse = handlePacket(packet, dnsQuery, question, this.rootServer);
-                        if(dnsResponse != null) {
+                        DNS dnsResponse = handlePacket(dnsQuery, question, this.rootServer);
+                        if(dnsResponse != null && !dnsResponse.getAnswers().isEmpty() && dnsResponse.getAnswers().get(0).getType() == question.getType()) {
+                            System.out.println(dnsResponse.toString());
+                            if(question.getType() == DNS.TYPE_A) {
+                                dnsResponse.getAnswers().addAll(getEC2TXTRecords(dnsResponse.getAnswers()));
+                            }
                             DatagramPacket responsePacket = new DatagramPacket(dnsResponse.serialize(), dnsResponse.serialize().length, packet.getAddress(), packet.getPort());
                             serverSocket.send(responsePacket);
                         }
@@ -68,7 +70,7 @@ public class DNSServer {
         }
     }
 
-    private DNS handlePacket(DatagramPacket packet, DNS dnsQuery, DNSQuestion question, InetAddress dnsServer) throws IOException {
+    private DNS handlePacket(DNS dnsQuery, DNSQuestion question, InetAddress dnsServer) throws IOException {
 
         byte[] buffer = new byte[1500];
         DatagramPacket receivedPacket = new DatagramPacket(buffer, buffer.length);
@@ -82,6 +84,7 @@ public class DNSServer {
 
             serverSocket.receive(receivedPacket);
             DNS queryResponse = DNS.deserialize(receivedPacket.getData(), receivedPacket.getData().length);
+            System.out.println(queryResponse.toString());
 
             ArrayList<DNSResourceRecord> answers = new ArrayList<>(queryResponse.getAnswers());
             ArrayList<DNSResourceRecord> authorities = new ArrayList<>(queryResponse.getAuthorities());
@@ -92,11 +95,18 @@ public class DNSServer {
                 //if we did not find an answer, we want to use our additional/authority section to recurse
                 if(!isQueryResolved(answers, question)) {
                     DNS recursiveReply = queryResponse;
-                    if(authorities.get(0).getType() == DNS.TYPE_NS) {
-                        recursiveReply = handlePacket(packet, dnsQuery, question, resolveNextServer(authorities, additionals));
+                    if(!authorities.isEmpty() && authorities.get(0).getType() == DNS.TYPE_NS) {
+                        InetAddress nextDNS = resolveNextServer(authorities, additionals);
+                        if(nextDNS == null) {
+                            return null;
+                        }
+                        recursiveReply = handlePacket(dnsQuery, question, nextDNS);
                     }
-                    else if(authorities.get(0).getType() == DNS.TYPE_CNAME) {
-                        recursiveReply = handlePacket(packet, dnsQuery, rewriteQuestion(answers.get(0), question), this.rootServer);
+                    else if(!authorities.isEmpty() && authorities.get(0).getType() == DNS.TYPE_CNAME) {
+                        recursiveReply = handlePacket(dnsQuery, rewriteQuestion(answers.get(0), question), this.rootServer);
+                    }
+                    if(recursiveReply == null) {
+                        return null;
                     }
                     answers = new ArrayList<>(recursiveReply.getAnswers());
                     authorities = new ArrayList<>(recursiveReply.getAuthorities());
@@ -200,9 +210,9 @@ public class DNSServer {
         }
     }
 
-    private HashMap<String, EC2Instance> parseAmazonCSV(String amazonEC2CSV) {
+    private ArrayList<EC2Instance> parseAmazonCSV(String amazonEC2CSV) {
 
-        HashMap<String, EC2Instance> ec2InstanceMap = new HashMap<String, EC2Instance>();
+        ArrayList<EC2Instance> ec2Instances = new ArrayList<>();
 
         try {
             FileReader reader = new FileReader(amazonEC2CSV);
@@ -212,7 +222,7 @@ public class DNSServer {
             while((line = bufferedReader.readLine()) != null) {
                 String[] values = line.split(",");
                 EC2Instance instance = new EC2Instance(values[0], values[1]);
-                ec2InstanceMap.put(values[0].split("/")[0], instance);
+                ec2Instances.add(instance);
             }
         }
         catch(FileNotFoundException e) {
@@ -224,7 +234,59 @@ public class DNSServer {
             System.exit(1);
         }
 
-        return ec2InstanceMap;
+        return ec2Instances;
     }
 
+    private ArrayList<DNSResourceRecord> getEC2TXTRecords(List<DNSResourceRecord> answers) {
+
+        ArrayList<DNSResourceRecord> txtRecords = new ArrayList<>();
+
+        for(DNSResourceRecord answer : answers) {
+            if(answer.getType() == DNS.TYPE_A) {
+
+                EC2Instance matchingInstance = isInEC2Region(answer.getData().toString());
+                if(matchingInstance != null) {
+                    txtRecords.add(constructEC2TXTRecord(matchingInstance, answer));
+                }
+            }
+        }
+
+        return txtRecords;
+    }
+
+    private EC2Instance isInEC2Region(String ip) {
+
+        int answerIpAsInt = stringIPtoInt(ip);
+
+        for(EC2Instance instance : this.ec2Instances) {
+
+            String[] instanceIPAndPrefix = instance.getIp().split("/");
+            int maskShift = Integer.parseInt(instanceIPAndPrefix[1]);
+            int EC2InstanceIp = stringIPtoInt(instanceIPAndPrefix[0]);
+
+            if (EC2InstanceIp == (answerIpAsInt & (-1 << maskShift))) {
+                return instance;
+            }
+        }
+        return null;
+    }
+
+    private int stringIPtoInt(String ip) {
+        int[] ipParts = new int[4];
+        String[] parts = ip.split("\\.");
+
+        for (int i = 0; i < 4; i++) {
+            ipParts[i] = Integer.parseInt(parts[i]);
+        }
+
+        int ipNumbers = 0;
+        for (int i = 0; i < 4; i++) {
+            ipNumbers += ipParts[i] << (24 - (8 * i));
+        }
+        return ipNumbers;
+    }
+
+    private DNSResourceRecord constructEC2TXTRecord(EC2Instance instance, DNSResourceRecord answer) {
+        return new DNSResourceRecord(answer.getName(), (short)16, new DNSRdataString(instance.getLocation()+ "-" + instance.getIp().split("/")[0]));
+    }
 }
