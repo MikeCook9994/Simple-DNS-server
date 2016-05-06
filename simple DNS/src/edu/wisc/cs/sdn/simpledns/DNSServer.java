@@ -52,8 +52,8 @@ public class DNSServer {
                     for (DNSQuestion question : dnsQuery.getQuestions()) {
                         System.out.println("Question: " + question.toString());
                         DNS dnsResponse = handlePacket(dnsQuery, question, this.rootServer);
-                        if(dnsResponse != null && !dnsResponse.getAnswers().isEmpty() && dnsResponse.getAnswers().get(0).getType() == question.getType()) {
-                            if(question.getType() == DNS.TYPE_A) {
+                        if(dnsResponse != null) {
+                            if (question.getType() == DNS.TYPE_A) {
                                 dnsResponse.getAnswers().addAll(getEC2TXTRecords(dnsResponse.getAnswers()));
                             }
                             DatagramPacket responsePacket = new DatagramPacket(dnsResponse.serialize(), dnsResponse.serialize().length, packet.getAddress(), packet.getPort());
@@ -73,8 +73,7 @@ public class DNSServer {
 
     private DNS handlePacket(DNS dnsQuery, DNSQuestion question, InetAddress dnsServer) throws IOException {
 
-        byte[] buffer = new byte[1500];
-        DatagramPacket receivedPacket = new DatagramPacket(buffer, buffer.length);
+        DatagramPacket receivedPacket = new DatagramPacket(new byte[1500], 1500);
 
         if (isSupportedQuestionType(question.getType())) {
 
@@ -86,6 +85,7 @@ public class DNSServer {
             this.serverSocket.send(queryPacket);
 
             serverSocket.receive(receivedPacket);
+
             DNS queryResponse = DNS.deserialize(receivedPacket.getData(), receivedPacket.getData().length);
             System.out.println("Received response from Name Server (" + dnsServer.toString() + ")");
             System.out.println("queryResponse:\n" + queryResponse.toString());
@@ -95,11 +95,13 @@ public class DNSServer {
             ArrayList<DNSResourceRecord> additionals = new ArrayList<>(queryResponse.getAdditional());
 
             //we only care about further resolving the result if recursion is desired
-            if (!isQueryResolved(answers, question)) {
+            if (dnsQuery.isRecursionDesired()) {
                 //if we did not find an answer, we want to use our additional/authority section to recurse
-                if (dnsQuery.isRecursionDesired()) {
+                if (!isQueryResolved(answers, question)) {
                     System.out.println("Did not answer the question and recursion is desired");
                     DNS recursiveReply = queryResponse;
+
+                    //Handles the case where we have authorities and are provided the additionals we need.
                     if (!authorities.isEmpty() && !additionals.isEmpty() && authorities.get(0).getType() == DNS.TYPE_NS) {
                         System.out.println("Authorities contains a name server and we have additionals to resolve with");
                         InetAddress nextDNS = resolveNextServer(authorities, additionals);
@@ -109,17 +111,51 @@ public class DNSServer {
                         }
                         System.out.println("Next recursive query will be made to " + nextDNS.toString());
                         recursiveReply = handlePacket(dnsQuery, question, nextDNS);
-                    } else if (!answers.isEmpty() && answers.get(0).getType() == DNS.TYPE_CNAME) {
-                        System.out.println("Server responded with a CNAME record. Beginning again at root name server for " + answers.get(0).getData().toString());
-                        recursiveReply = handlePacket(dnsQuery, rewriteQuestion(answers.get(0), question), this.rootServer);
+
+                        answers.addAll(recursiveReply.getAnswers());
+                        authorities = new ArrayList<>(recursiveReply.getAuthorities());
+                        additionals = new ArrayList<>(recursiveReply.getAdditional());
                     }
+
+                    //Handles the CNAME case
+                    else if (!answers.isEmpty() && answers.get(0).getType() == DNS.TYPE_CNAME) {
+                        System.out.println("Server responded with a CNAME record. Beginning again at root name server for " + answers.get(0).getData().toString());
+                        recursiveReply = handlePacket(dnsQuery, constructNewQuestion(answers.get(0), question), this.rootServer);
+
+                        answers.addAll(recursiveReply.getAnswers());
+                        authorities = new ArrayList<>(recursiveReply.getAuthorities());
+                        additionals = new ArrayList<>(recursiveReply.getAdditional());
+                    }
+
+                    //Resolves the case where we have authorities but no additionals and we must resolve them ourselves
+                    else if(!authorities.isEmpty() && additionals.isEmpty() && authorities.get(0).getType() == DNS.TYPE_NS) {
+                        System.out.println("No additionals. Must resolve an authority entry");
+
+                        DNSQuestion authorityQuestion = new DNSQuestion();
+                        authorityQuestion.setName(authorities.get(0).getData().toString());
+                        authorityQuestion.setClass(question.getCls());
+                        authorityQuestion.setType(DNS.TYPE_A);
+                        System.out.println("authority Question: " + authorityQuestion.toString());
+
+                        DNS authorityQuery = constructDNSQuery(dnsQuery.getId(), authorityQuestion);
+                        authorityQuery.setRecursionDesired(true);
+                        System.out.println("authority Query: " + authorityQuery.toString());
+
+                        recursiveReply = handlePacket(authorityQuery, authorityQuestion, this.rootServer);
+
+                        recursiveReply = handlePacket(dnsQuery, question, InetAddress.getByName(recursiveReply.getAnswers().get(0).getData().toString()));
+
+                        answers.addAll(recursiveReply.getAnswers());
+                        authorities = new ArrayList<>(recursiveReply.getAuthorities());
+                        additionals = new ArrayList<>(recursiveReply.getAdditional());
+
+                    }
+                    System.out.println("recursive reply:\n" + recursiveReply.toString());
+
                     if (recursiveReply == null) {
                         System.out.println("Recursive reply returned null. Must drop Query");
                         return null;
                     }
-                    answers = new ArrayList<>(recursiveReply.getAnswers());
-                    authorities = new ArrayList<>(recursiveReply.getAuthorities());
-                    additionals = new ArrayList<>(recursiveReply.getAdditional());
                 }
             }
             DNS returnRecord = constructDNSReply(dnsQuery.getId(), question, answers, authorities, additionals);
@@ -129,9 +165,11 @@ public class DNSServer {
         return null;
     }
 
-    private DNSQuestion rewriteQuestion(DNSResourceRecord answer, DNSQuestion question) {
-        DNSQuestion rewrittenQuestion = question;
+    private DNSQuestion constructNewQuestion(DNSResourceRecord answer, DNSQuestion question) {
+        DNSQuestion rewrittenQuestion = new DNSQuestion();
         rewrittenQuestion.setName(answer.getData().toString());
+        rewrittenQuestion.setClass(question.getCls());
+        rewrittenQuestion.setType(question.getType());
         System.out.println("Rewriting questions to: " + rewrittenQuestion.toString());
         return rewrittenQuestion;
     }
@@ -152,7 +190,6 @@ public class DNSServer {
                 }
             }
         }
-
         return null;
     }
 
@@ -175,6 +212,8 @@ public class DNSServer {
     }
 
     private DNS constructDNSReply(short id, DNSQuestion question, ArrayList<DNSResourceRecord> answers, ArrayList<DNSResourceRecord> authorities, ArrayList<DNSResourceRecord> additionals) {
+
+        System.out.println("constructing reply with " + question.toString() + " question");
 
         DNS finalQueryResponse = new DNS();
 
