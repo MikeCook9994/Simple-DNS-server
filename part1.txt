@@ -3,7 +3,7 @@
     a. According to the WebPagetest data, how many DNS lookups were performed by the client? 
     How many of the lookups were redundant (i.e., the lookup was for the same domain name)? 
     
-    Answer: We have 12 seperate DNS requests made. 
+    Answer: We have 12 seperate DNS requests made, none of which are redundant.
     
     b. Assuming no DNS records were cached at the local DNS server, what DNS queries did the
     local DNS server need to issue to satisfy the client’s first lookup?
@@ -28,12 +28,6 @@
     
     Name Server Queried     | Records Returned
     ________________________|__________________________________________
-    a.root-servers.net      | org, NS, d0.org.afilias-nst.org
-                            | d0.org.afilias-nst.org, A, 199.19.57.1
-    ________________________|__________________________________________ 
-    d0.org.afilias-nst.org  | code.org, NS, ns-1497.awsdns-59.org
-                            | ns-1497.awsdns-59.org, A, 205.251.197.217
-    ________________________|__________________________________________
     ns-1497.awsdns-59.org   | code.org, A, 52.84.8.105
 
 2) Clouds & CDNs
@@ -51,32 +45,16 @@
     
     Answer: 
     
+    cdn.optimizely.com (23.203.150.187) --> akamai server
+    
     c. According to the WebPagetest data, how many HTTP requests were issued to each CDN 
     node? Over how many connections were these requests issued? 
     
-    Answer: 
+    Answer:  
+    
+    There were 47 HTTP requests to a cloudflare CDN node over 6 connections.
     
     d. How many of the requested web objects were already stored in the CDN’s cache? (Hint: look 
     at the X-Cache field in the HTTP response header)
     
-    Answer: 
-    
-    
-    
-    
-    
-    
-    
-    
-    www.code.org --> 50.17.209.250
-    code.org --> 54.230.53.206
-    www.fullstory.com --> 72.14.248.62
-    www.google-analytics.com --> 216.58.218.238
-    www.youtube.com --> 172.217.1.206
-    js-agent.newrelic.com --> 23.235.46.175
-    s.ytimg.com --> 216.58.218.238
-    bam.nr-data.net --> 50.31.164.166
-    www.google.com --> 74.125.196.147
-    static.doubleclick.net --> 216.58.218.238
-    i.ytimg.com --> 172.217.1.206
-    fonts.gstatic.com --> 74.125.22.94
+    Answer: There were 44 successful hits.
